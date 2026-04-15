@@ -1,0 +1,4 @@
+Media Storage/
+__pycache__/
+*.pyc
+tiktok_env/
