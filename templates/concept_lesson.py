@@ -2,6 +2,26 @@ from manim import *
 
 class SplitScreenConcept(Scene):
     def construct(self):
+        # NEW: Fetch duration from create_lesson.py (defaults to 60s if not found)
+        video_duration = float(os.getenv("VIDEO_DURATION", 60))
+
+        # --- Setup UI ---
+        self.camera.background_color = "#050505"
+        # ... (Keep your code_snippet and visual_group setup from before) ...
+
+        # --- Progress Bar Sync ---
+        progress_fill = Line(LEFT*5, RIGHT*5, color="#4AF626", stroke_width=15).to_edge(DOWN, buff=0.2)
+        
+        # We run the lesson and the progress bar simultaneously 
+        # using the exact duration of the AI's voice.
+        self.play(
+            AnimationGroup(
+                Write(code_snippet),
+                Create(progress_fill, rate_func=linear),
+                lag_ratio=0
+            ),
+            run_time=video_duration 
+        )
         # --- 1. SETUP (Pure Black Canvas) ---
         self.camera.background_color = "#050505" # Very deep black/grey
 

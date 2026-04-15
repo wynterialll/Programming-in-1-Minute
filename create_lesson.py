@@ -4,61 +4,63 @@ import shutil
 from pathlib import Path
 import ollama # <-- NEW: The library to talk to your local AI
 import json   # <-- NEW: To decode the AI's response
+import wave # To measure audio duration
 
 def setup_project_folders(topic_name):
-    """Automatically generates the strict Media Storage root structure."""
-    print(f"--- Setting up folders for: {topic_name} ---")
-    
     base_dir = Path("Media Storage") / topic_name
-    
-    paths = {
-        "text": base_dir / "text",
-        "image": base_dir / "image",
-        "videos": base_dir / "videos",
-        "manim_cache": base_dir / "manim_cache" # Temporary holding cell for Manim junk
-    }
-    
-    # Create the subfolders
+    paths = {"text": base_dir / "text", "image": base_dir / "image", 
+             "videos": base_dir / "videos", "manim_cache": base_dir / "manim_cache"}
     for folder in paths.values():
         folder.mkdir(parents=True, exist_ok=True)
-        
-    # Define the final video as a .mp4 FILE inside the topic root
-    final_video_file = base_dir / f"{topic_name}_video.mp4"
-        
-    return paths, final_video_file
+    return paths, base_dir / f"{topic_name}_video.mp4"
 
-def phase_1_planning(user_topic):
-    """Uses your local Gemma AI to write the lesson script."""
-    print(f"\n--- Phase 1: Asking AI to plan '{user_topic}' ---")
+def get_audio_duration(audio_path):
+    with wave.open(str(audio_path), 'rb') as f:
+        return f.getnframes() / float(f.getframerate())
+
+def phase_1_brain(user_topic):
+    """Two-Agent AI Pipeline: 1. Scriptwriter -> 2. Manim Coder"""
+    print(f"\n--- Phase 1A: Scripting '{user_topic}' ---")
     
-    # We use Prompt Engineering to force the AI to return computer-readable JSON
-    prompt = f"""
-    You are an expert programming teacher making 1-minute TikToks.
-    Write a 1-sentence educational script explaining the concept of: {user_topic}.
+    # AGENT 1: The Scriptwriter
+    script_prompt = f"Write a 1-minute (150 word) script for a beginner about {user_topic} using a real-world analogy. Return ONLY JSON: {{\"spoken_text\": \"...\"}}"
+    res1 = ollama.chat(model='gemma4:e4b', messages=[{'role': 'user', 'content': script_prompt}], format='json', options={'keep_alive': 0})
+    script_data = json.loads(res1['message']['content'])
     
-    You MUST respond ONLY with a valid JSON object in this exact format. Do not include markdown formatting or extra text:
-    {{
-        "topic_name": "OneWordTopic",
-        "spoken_text": "The 1-sentence script to be spoken."
-    }}
+    print(f"--- Phase 1B: Coding Animation ---")
+    # AGENT 2: The Manim Coder (reads the ai_reference.txt)
+    with open("ai_reference.txt", "r") as f:
+        reference = f.read()
+
+    coder_prompt = f"""
+    Based on this script: "{script_data['spoken_text']}"
+    Write ONLY the Python code for the 'construct(self)' method of a Manim Scene.
+    Use these components: {reference}
+    Return ONLY JSON: {{"manim_code": "self.play(...); self.wait(...)"}}
     """
+    res2 = ollama.chat(model='gemma4:e4b', messages=[{'role': 'user', 'content': coder_prompt}], format='json', options={'keep_alive': 0})
+    coder_data = json.loads(res2['message']['content'])
     
-    # Ping the local AI
-    response = ollama.chat(model='gemma4:e4b', messages=[
-        {'role': 'user', 'content': prompt}
-    ], format='json')
-    
-    # Extract the AI's text and combine it with our Manim template data
-    try:
-        ai_data = json.loads(response['message']['content'])
-        ai_data["template_file"] = "templates/concept_lesson.py"
-        ai_data["scene_name"] = "SplitScreenConcept"
-        
-        print(f"AI Approved Script: {ai_data['spoken_text']}\n")
-        return ai_data
-    except Exception as e:
-        print(f"ERROR: The AI didn't format the text correctly. {e}")
-        exit()
+    script_data.update(coder_data)
+    script_data["topic_name"] = user_topic.replace(" ", "_")
+    return script_data
+
+def generate_manim_file(topic_name, ai_code):
+    """Combines a master template with the AI's generated code."""
+    template = f"""
+from manim import *
+from templates.visual_lib import * # Imports your Lego bricks
+
+class AI_Generated_Scene(Scene):
+    def construct(self):
+        self.camera.background_color = "#050505"
+        # AI GENERATED CODE BELOW
+        {ai_code}
+    """
+    file_path = Path("templates") / f"gen_{topic_name}.py"
+    with open(file_path, "w") as f:
+        f.write(template)
+    return file_path
 
 def phase_2_generate_audio(text, output_path):
     """Uses Piper TTS and saves directly to the videos folder."""
@@ -71,28 +73,19 @@ def phase_2_generate_audio(text, output_path):
     print(f"Audio saved to: {output_str}")
     return output_str
 
-def phase_3_generate_video(template_file, scene_name, organized_video_path, cache_dir):
-    """Renders 16:9 wide animation and traps the raw files in a cache folder."""
-    print("--- Phase 3: Rendering Animation ---")
+def phase_3_generate_video(template_file, scene_name, video_path, cache_dir, duration):
+    print(f"--- Phase 3: Rendering Animation ({duration:.2f}s) ---")
+    # We pass the duration into the environment variables for Manim to read
+    env_vars = os.environ.copy()
+    env_vars["VIDEO_DURATION"] = str(duration)
     
-    # FIX: Removed the -r 1080,1920 flag. Manim will now default to standard wide resolution.
     command = f'manim --media_dir "{cache_dir}" "{template_file}" {scene_name}'
-    subprocess.run(command, shell=True)
+    subprocess.run(command, shell=True, env=env_vars)
     
-    # Dynamically search the cache folder to find the rendered .mp4
     found_videos = list(cache_dir.glob(f"**/{scene_name}.mp4"))
-    
     if found_videos:
-        # Move it to our clean videos folder
-        shutil.copy(found_videos[0], organized_video_path)
-        print(f"Raw video moved to: {organized_video_path}")
-        
-        # Delete the messy Manim cache folder so your root stays perfectly clean
+        shutil.copy(found_videos[0], video_path)
         shutil.rmtree(cache_dir)
-    else:
-        print("ERROR: Manim failed to output the video.")
-    
-    return str(organized_video_path)
 
 def phase_4_assemble_video(video_path, audio_path, final_output_path):
     """Stitches audio and video, standardizing to a universal wide format."""
@@ -112,19 +105,19 @@ def phase_4_assemble_video(video_path, audio_path, final_output_path):
 # MASTER EXECUTION
 # ==========================================
 if __name__ == "__main__":
-    # NEW: Chat with your terminal!
-    print("Welcome to the TikTok Automator!")
-    target_concept = input("What programming concept should we teach today? > ")
+    topic = input("What are we teaching? > ")
     
-    # 1. Pass your input to the AI
-    lesson_data = phase_1_planning(target_concept)
+    # 1. Two-Agent Planning
+    lesson_data = phase_1_brain(topic)
     
-    # 2. Build the folder structure and get paths
-    folders, final_save_path = setup_project_folders(lesson_data["topic_name"])
-    audio_save_path = folders["videos"] / "raw_audio.wav"
-    video_save_path = folders["videos"] / "raw_animation.mp4"
+    # 2. Setup & File Creation
+    folders, final_path = setup_project_folders(lesson_data["topic_name"])
+    manim_file = generate_manim_file(lesson_data["topic_name"], lesson_data["manim_code"])
     
-    # 3. Run the pipeline
-    phase_2_generate_audio(lesson_data["spoken_text"], audio_save_path)
-    phase_3_generate_video(lesson_data["template_file"], lesson_data["scene_name"], video_save_path, folders["manim_cache"])
-    phase_4_assemble_video(str(video_save_path), str(audio_save_path), final_save_path)
+    # 3. Audio & Rendering
+    audio_path = folders["videos"] / "raw_audio.wav"
+    phase_2_generate_audio(lesson_data["spoken_text"], audio_path)
+    
+    # 4. Final Video
+    phase_3_generate_video(str(manim_file), "AI_Generated_Scene", folders["videos"] / "raw_animation.mp4", folders["manim_cache"])
+    phase_4_assemble_video(str(folders["videos"] / "raw_animation.mp4"), str(audio_path), final_path)

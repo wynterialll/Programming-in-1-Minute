@@ -1,0 +1,10 @@
+Manim v0.20.1 Standards for Programming in 1 Minute:
+1. Aspect Ratio: 16:9 (Wide).
+2. Layout: Code on the LEFT, Visual Metaphors on the RIGHT.
+3. Code Object Fix: NEVER use .code attribute. Use indexing like: code_snippet[-1][0] to target line 1.
+4. Visual Components (Auto-imported):
+   - VariableBox(label, value): A box with a label above and value inside.
+   - DataList([val1, val2]): A row of boxes for arrays/lists.
+   - LogicGate("condition"): A yellow diamond for if-statements.
+5. Timing: Use 'self.play(Write(object))' or 'self.play(Create(object))'.
+6. Highlight: Use 'SurroundingRectangle(code_snippet[-1][i])' for line emphasis.
